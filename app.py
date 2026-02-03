@@ -3,46 +3,60 @@ import google.generativeai as genai
 from PIL import Image
 import json
 import sqlite3
+import time
+import random
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except:
     st.error("⚠️ Clé API manquante. Vérifiez les secrets Streamlit.")
     st.stop()
 
-# --- 2. LE CHANGEMENT CRUCIAL (Basé sur ta liste) ---
-# On utilise le modèle présent dans ton diagnostic : 'models/gemini-2.0-flash'
-try:
-    model = genai.GenerativeModel('models/gemini-flash-latest')
-except Exception as e:
-    st.error(f"Erreur de chargement du modèle : {e}")
-    st.stop()
+# --- SÉCURITÉ MODÈLE ---
+# On utilise le modèle le plus stable et rapide
+MODEL_NAME = 'gemini-1.5-flash' 
 
 st.set_page_config(page_title="ClaimCheck AI - Expert ANAM", page_icon="🇲🇦", layout="wide")
 
-# --- 3. CERVEAU : CONNEXION BASE DE DONNÉES ---
+# --- FONCTION ROBUSTE AVEC "AMORTISSEUR" (RETRY LOGIC) ---
+def ask_gemini_secure(prompt, image):
+    """Interroge l'IA avec un système de réessai automatique en cas d'erreur 429"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            model = genai.GenerativeModel(MODEL_NAME)
+            response = model.generate_content([prompt, image])
+            return response.text
+        except Exception as e:
+            error_str = str(e)
+            # Si c'est une erreur de quota (429), on attend et on réessaie
+            if "429" in error_str:
+                wait_time = (attempt + 1) * 5  # Attendre 5s, puis 10s, puis 15s...
+                st.warning(f"🚦 Trafic élevé sur l'IA. Pause de {wait_time} secondes...")
+                time.sleep(wait_time)
+                continue
+            # Si c'est une autre erreur, on l'affiche
+            else:
+                st.error(f"Erreur technique IA : {e}")
+                return None
+    return None
+
+# --- CERVEAU : CONNEXION BDD ---
 def get_tarif_reference(nom_ou_code, secteur):
-    """Cherche le prix officiel dans notre base de données"""
     try:
         conn = sqlite3.connect('claimcheck.db')
         c = conn.cursor()
-    except:
-        return None # Pas de base trouvée
-    
-    # Sélection de la colonne selon le secteur
-    colonne_prix = "tarif_prive" if secteur == "PRIVE" else "tarif_public"
-    
-    # A. Recherche par Code (K, B, C...)
-    try:
+        colonne_prix = "tarif_prive" if secteur == "PRIVE" else "tarif_public"
+        
+        # 1. Recherche par Code (K, B, C...)
         c.execute(f"SELECT {colonne_prix}, description FROM lettres_cles WHERE code=?", (nom_ou_code.upper(),))
         res = c.fetchone()
         if res:
             conn.close()
             return {"type": "lettre", "valeur": res[0], "desc": res[1]}
             
-        # B. Recherche par Forfait (Césarienne, Scanner...)
-        # On cherche un mot clé dans la description
+        # 2. Recherche par Forfait
         c.execute(f"SELECT {colonne_prix}, nom_acte FROM forfaits WHERE mots_cles LIKE ?", (f"%{nom_ou_code.lower()}%",))
         res = c.fetchone()
         conn.close()
@@ -51,10 +65,9 @@ def get_tarif_reference(nom_ou_code, secteur):
             return {"type": "forfait", "valeur": res[0], "desc": res[1]}
     except:
         return None
-        
     return None
 
-# --- 4. YEUX : ANALYSE DOC PAR L'IA ---
+# --- YEUX : ANALYSE DOC ---
 def analyser_document_ia(image):
     prompt = """
     Tu es un expert en facturation médicale marocaine (CNSS/AMO). Analyse cette image.
@@ -69,7 +82,7 @@ def analyser_document_ia(image):
         "etablissement": "Nom visible ou Inconnu",
         "actes": [
             {
-                "description": "Nom de l'acte (ex: Consultation, Césarienne, Scanner)",
+                "description": "Nom de l'acte",
                 "code": "Code si visible (ex: K, C, B) sinon null",
                 "coefficient": "Valeur du coeff (ex: 50, 100) sinon 0",
                 "montant_facture": "Montant total en DH"
@@ -77,19 +90,21 @@ def analyser_document_ia(image):
         ]
     }
     """
-    try:
-        # On utilise le modèle 2.0 Flash qui est très rapide
-        response = model.generate_content([prompt, image])
-        # Nettoyage chirurgical de la réponse pour éviter les bugs JSON
-        clean_json = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_json)
-    except Exception as e:
-        st.error(f"Erreur d'analyse IA : {e}")
-        return None
+    
+    json_text = ask_gemini_secure(prompt, image)
+    
+    if json_text:
+        try:
+            clean_json = json_text.replace("```json", "").replace("```", "").strip()
+            return json.loads(clean_json)
+        except:
+            st.error("Erreur de lecture des données reçues.")
+            return None
+    return None
 
-# --- 5. INTERFACE UTILISATEUR ---
+# --- INTERFACE ---
 st.title("ClaimCheck AI 🇲🇦")
-st.caption("Moteur : Gemini 2.0 Flash | Référentiel : ANAM & TNR 2007")
+st.caption("Mode : Robuste | Référentiel : ANAM & TNR 2007")
 
 col_upload, col_result = st.columns([1, 2])
 
@@ -101,7 +116,7 @@ with col_upload:
 
 with col_result:
     if uploaded_file and st.button("Lancer l'Audit"):
-        with st.spinner("⚡ Analyse intelligente en cours..."):
+        with st.spinner("⚡ Analyse intelligente en cours (Mode Sécurisé)..."):
             
             data = analyser_document_ia(image)
             
@@ -109,7 +124,7 @@ with col_result:
                 secteur = data.get("secteur", "PRIVE").upper()
                 nom_hopital = data.get("etablissement", "Non identifié")
                 
-                # En-tête dynamique selon le secteur
+                # En-tête dynamique
                 if secteur == "PUBLIC":
                     st.info(f"🏛️ **SECTEUR PUBLIC DÉTECTÉ**\n\nÉtablissement : {nom_hopital}\nGrille tarifaire : Hôpitaux (K=13 DH).")
                 else:
@@ -117,10 +132,10 @@ with col_result:
                 
                 st.divider()
                 
-                # Analyse détaillée des actes
+                # Analyse
                 actes = data.get("actes", [])
                 if not actes:
-                    st.warning("Aucun acte tarifié détecté sur ce document.")
+                    st.warning("Aucun acte tarifié détecté.")
                 
                 for acte in actes:
                     desc = acte.get("description", "Acte inconnu")
@@ -128,53 +143,38 @@ with col_result:
                     coeff = float(acte.get("coefficient") or 0)
                     prix_facture = float(acte.get("montant_facture") or 0)
                     
-                    # Interrogation du cerveau (Base de données)
                     ref = None
                     prix_legal = 0
-                    mode_calcul = ""
                     
-                    # Stratégie de recherche : Code d'abord, sinon Nom
                     if code: 
                         ref = get_tarif_reference(code, secteur)
                         if ref and ref["type"] == "lettre":
                             prix_legal = ref["valeur"] * coeff
-                            mode_calcul = f"Calculé : {code} ({ref['valeur']} DH) x {coeff}"
                     
-                    if prix_legal == 0: # Si pas trouvé par code, on cherche par nom (Forfait)
+                    if prix_legal == 0: 
                         ref = get_tarif_reference(desc, secteur)
                         if ref: 
                             prix_legal = ref["valeur"]
-                            mode_calcul = "Forfait Conventionnel"
                     
-                    # Affichage du résultat
                     c1, c2, c3 = st.columns([3, 2, 2])
-                    
-                    # Colonne 1 : Description
                     c1.write(f"**{desc}**")
-                    if code and coeff > 0:
-                        c1.caption(f"Code lu : {code}{coeff}")
-                    
-                    # Colonne 2 : Prix Facturé
+                    if code and coeff > 0: c1.caption(f"Code : {code}{coeff}")
                     c2.write(f"Facturé : **{prix_facture} DH**")
                     
-                    # Colonne 3 : Verdict
                     if prix_legal > 0:
                         diff = prix_facture - prix_legal
-                        # Marge de tolérance de 10%
                         if diff > (prix_legal * 0.1):
                             c3.error(f"❌ Ref: {prix_legal} DH")
                             st.caption(f"⚠️ **Surfacturation de {diff:.2f} DH**")
                         elif diff < -(prix_legal * 0.1):
                             c3.warning(f"⚠️ Ref: {prix_legal} DH")
-                            st.caption("Sous-facturation (Perte)")
+                            st.caption("Sous-facturation")
                         else:
                             c3.success(f"✅ Ref: {prix_legal} DH")
                             st.caption("Conforme")
                     else:
                         c3.info("❓ Pas de réf")
-                        st.caption("Non trouvé dans la base")
                     
                     st.divider()
-                    
             else:
-                st.error("L'IA n'a pas pu lire le document. Essayez une image plus nette.")
+                st.error("L'IA n'a pas pu lire le document après plusieurs essais.")
