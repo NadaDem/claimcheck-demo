@@ -41,35 +41,47 @@ def get_tarif_reference(nom_ou_code, secteur):
         
     return None
 
-# --- YEUX : ANALYSE DOC ---
+# --- YEUX : ANALYSE DOC (VERSION DEBUG) ---
 def analyser_document_ia(image):
     prompt = """
     Tu es un auditeur médical expert au Maroc. Analyse ce document.
     
     ÉTAPE 1 : DÉTECTION DU SECTEUR
     - Si tu vois "Ministère de la Santé", "CHU", "Hôpital Provincial", "Royaume du Maroc" (logo) -> Secteur PUBLIC.
-    - Si tu vois "Clinique", "Polyclinique", "Cabinet", "Centre Privé" -> Secteur PRIVE.
+    - Si tu vois "Clinique", "Polyclinique", "Cabinet", "Centre Privé", "Dr" -> Secteur PRIVE.
     
     ÉTAPE 2 : EXTRACTION
-    Extrais en JSON strict :
+    Réponds UNIQUEMENT avec un JSON valide, sans texte avant ni après, sous cette forme :
     {
         "secteur": "PUBLIC" ou "PRIVE",
         "etablissement": "Nom de l'hôpital ou clinique",
         "actes": [
             {
-                "description": "Nom de l'acte (ex: Césarienne, Consultation, Scanner)",
-                "code": "Lettre clé si visible (ex: K, B, C)",
-                "coefficient": "Valeur du coeff (ex: 50, 100)",
-                "montant_facture": "Montant total en DH"
+                "description": "Nom de l'acte",
+                "code": "Lettre clé (K, B, C) ou null",
+                "coefficient": "Valeur du coeff ou 0",
+                "montant_facture": "Montant en DH ou 0"
             }
         ]
     }
     """
     try:
         response = model.generate_content([prompt, image])
+        
+        # --- DEBUG : ON AFFICHE CE QUE L'IA RACONTE ---
+        st.write("🤖 **DEBUG - Réponse brute de l'IA :**")
+        st.code(response.text) 
+        # -----------------------------------------------
+
+        # Nettoyage un peu plus agressif du JSON
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
+        
+        # On tente de charger
         return json.loads(clean_json)
-    except:
+
+    except Exception as e:
+        # ON AFFICHE L'ERREUR EXACTE
+        st.error(f"⚠️ ERREUR TECHNIQUE : {e}")
         return None
 
 # --- INTERFACE ---
