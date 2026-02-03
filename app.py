@@ -12,42 +12,46 @@ except:
     st.error("⚠️ Clé API manquante. Vérifiez les secrets Streamlit.")
     st.stop()
 
-# --- LE CORRECTIF EST ICI ---
-# On utilise le nom exact qui est sorti dans ton diagnostic
-MODEL_NAME = 'models/gemini-flash-latest' 
+st.set_page_config(page_title="ClaimCheck AI - Expert", page_icon="🇲🇦", layout="wide")
 
-st.set_page_config(page_title="ClaimCheck AI - Expert ANAM", page_icon="🇲🇦", layout="wide")
+# --- LISTE DES MODÈLES À TESTER (ORDRE DE PRIORITÉ) ---
+# Si le premier est bloqué (429), on passe au suivant.
+MODELS_TO_TRY = [
+    'models/gemini-1.5-flash',       # Le standard rapide
+    'models/gemini-flash-latest',    # La dernière version
+    'models/gemini-1.5-pro',         # Plus puissant
+    'models/gemini-pro',             # L'ancien (souvent libre)
+    'models/gemini-2.0-flash-exp'    # L'expérimental (si dispo)
+]
 
-# --- FONCTION ROBUSTE AVEC "AMORTISSEUR" (RETRY LOGIC) ---
-def ask_gemini_secure(prompt, image):
-    """Interroge l'IA avec un système de réessai automatique en cas d'erreur"""
-    max_retries = 3
-    for attempt in range(max_retries):
+# --- FONCTION PASSE-PARTOUT ---
+def ask_gemini_rotator(prompt, image):
+    """Essaie les modèles un par un jusqu'à ce que ça passe"""
+    
+    last_error = ""
+    
+    for model_name in MODELS_TO_TRY:
         try:
-            model = genai.GenerativeModel(MODEL_NAME)
+            # On tente avec le modèle courant
+            model = genai.GenerativeModel(model_name)
             response = model.generate_content([prompt, image])
+            
+            # Si on arrive ici, c'est que ça a marché !
+            # On affiche quel modèle a réussi (pour info)
+            st.success(f"✅ Analyse réussie avec le modèle : {model_name}")
             return response.text
+            
         except Exception as e:
             error_str = str(e)
-            # Gestion des quotas (429)
-            if "429" in error_str:
-                wait_time = (attempt + 1) * 5
-                st.warning(f"🚦 Trafic intense. Nouvelle tentative dans {wait_time}s...")
-                time.sleep(wait_time)
+            # Si c'est une erreur de quota (429) ou modèle introuvable (404), on continue
+            if "429" in error_str or "404" in error_str:
+                # On passe silencieusement au suivant
                 continue
-            # Gestion des erreurs de modèle (404) -> Fallback sur Pro
-            elif "404" in error_str and "not found" in error_str:
-                st.warning("⚠️ Modèle 'Flash' non trouvé, tentative avec 'Pro'...")
-                try:
-                    model = genai.GenerativeModel('models/gemini-pro-latest')
-                    response = model.generate_content([prompt, image])
-                    return response.text
-                except:
-                    st.error(f"Erreur fatale : Aucun modèle compatible trouvé.")
-                    return None
             else:
-                st.error(f"Erreur technique : {e}")
-                return None
+                last_error = error_str
+    
+    # Si on arrive ici, tous les modèles ont échoué
+    st.error(f"❌ Tous les modèles sont saturés ou indisponibles. Erreur : {last_error}")
     return None
 
 # --- CERVEAU : CONNEXION BDD ---
@@ -57,14 +61,12 @@ def get_tarif_reference(nom_ou_code, secteur):
         c = conn.cursor()
         colonne_prix = "tarif_prive" if secteur == "PRIVE" else "tarif_public"
         
-        # 1. Recherche par Code (K, B, C...)
         c.execute(f"SELECT {colonne_prix}, description FROM lettres_cles WHERE code=?", (nom_ou_code.upper(),))
         res = c.fetchone()
         if res:
             conn.close()
             return {"type": "lettre", "valeur": res[0], "desc": res[1]}
             
-        # 2. Recherche par Forfait
         c.execute(f"SELECT {colonne_prix}, nom_acte FROM forfaits WHERE mots_cles LIKE ?", (f"%{nom_ou_code.lower()}%",))
         res = c.fetchone()
         conn.close()
@@ -99,20 +101,20 @@ def analyser_document_ia(image):
     }
     """
     
-    json_text = ask_gemini_secure(prompt, image)
+    json_text = ask_gemini_rotator(prompt, image)
     
     if json_text:
         try:
             clean_json = json_text.replace("```json", "").replace("```", "").strip()
             return json.loads(clean_json)
         except:
-            st.error("Erreur de lecture des données reçues.")
+            st.error("L'IA a répondu mais le format n'est pas lisible.")
             return None
     return None
 
 # --- INTERFACE ---
 st.title("ClaimCheck AI 🇲🇦")
-st.caption("Mode : Expert | Modèle : Gemini Flash Latest")
+st.caption("Mode : Multi-Moteurs (Anti-Blocage)")
 
 col_upload, col_result = st.columns([1, 2])
 
@@ -124,7 +126,7 @@ with col_upload:
 
 with col_result:
     if uploaded_file and st.button("Lancer l'Audit"):
-        with st.spinner("⚡ Analyse intelligente en cours..."):
+        with st.spinner("🔄 Recherche d'un moteur IA disponible..."):
             
             data = analyser_document_ia(image)
             
@@ -132,7 +134,6 @@ with col_result:
                 secteur = data.get("secteur", "PRIVE").upper()
                 nom_hopital = data.get("etablissement", "Non identifié")
                 
-                # En-tête dynamique
                 if secteur == "PUBLIC":
                     st.info(f"🏛️ **SECTEUR PUBLIC DÉTECTÉ**\n\nÉtablissement : {nom_hopital}\nGrille tarifaire : Hôpitaux (K=13 DH).")
                 else:
@@ -140,7 +141,6 @@ with col_result:
                 
                 st.divider()
                 
-                # Analyse
                 actes = data.get("actes", [])
                 if not actes:
                     st.warning("Aucun acte tarifié détecté.")
@@ -154,7 +154,6 @@ with col_result:
                     ref = None
                     prix_legal = 0
                     
-                    # Logique de recherche
                     if code: 
                         ref = get_tarif_reference(code, secteur)
                         if ref and ref["type"] == "lettre":
@@ -165,7 +164,6 @@ with col_result:
                         if ref: 
                             prix_legal = ref["valeur"]
                     
-                    # Affichage
                     c1, c2, c3 = st.columns([3, 2, 2])
                     c1.write(f"**{desc}**")
                     if code and coeff > 0: c1.caption(f"Code : {code}{coeff}")
@@ -173,7 +171,6 @@ with col_result:
                     
                     if prix_legal > 0:
                         diff = prix_facture - prix_legal
-                        # Tolérance de 10%
                         if diff > (prix_legal * 0.1):
                             c3.error(f"❌ Ref: {prix_legal} DH")
                             st.caption(f"⚠️ **Surfacturation de {diff:.2f} DH**")
@@ -187,5 +184,3 @@ with col_result:
                         c3.info("❓ Pas de réf")
                     
                     st.divider()
-            else:
-                st.error("L'IA n'a pas pu lire le document après plusieurs essais.")
