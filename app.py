@@ -4,7 +4,6 @@ from PIL import Image
 import json
 import sqlite3
 import time
-import random
 
 # --- CONFIGURATION ---
 try:
@@ -13,15 +12,15 @@ except:
     st.error("⚠️ Clé API manquante. Vérifiez les secrets Streamlit.")
     st.stop()
 
-# --- SÉCURITÉ MODÈLE ---
-# On utilise le modèle le plus stable et rapide
-MODEL_NAME = 'gemini-1.5-flash' 
+# --- LE CORRECTIF EST ICI ---
+# On utilise le nom exact qui est sorti dans ton diagnostic
+MODEL_NAME = 'models/gemini-flash-latest' 
 
 st.set_page_config(page_title="ClaimCheck AI - Expert ANAM", page_icon="🇲🇦", layout="wide")
 
 # --- FONCTION ROBUSTE AVEC "AMORTISSEUR" (RETRY LOGIC) ---
 def ask_gemini_secure(prompt, image):
-    """Interroge l'IA avec un système de réessai automatique en cas d'erreur 429"""
+    """Interroge l'IA avec un système de réessai automatique en cas d'erreur"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -30,15 +29,24 @@ def ask_gemini_secure(prompt, image):
             return response.text
         except Exception as e:
             error_str = str(e)
-            # Si c'est une erreur de quota (429), on attend et on réessaie
+            # Gestion des quotas (429)
             if "429" in error_str:
-                wait_time = (attempt + 1) * 5  # Attendre 5s, puis 10s, puis 15s...
-                st.warning(f"🚦 Trafic élevé sur l'IA. Pause de {wait_time} secondes...")
+                wait_time = (attempt + 1) * 5
+                st.warning(f"🚦 Trafic intense. Nouvelle tentative dans {wait_time}s...")
                 time.sleep(wait_time)
                 continue
-            # Si c'est une autre erreur, on l'affiche
+            # Gestion des erreurs de modèle (404) -> Fallback sur Pro
+            elif "404" in error_str and "not found" in error_str:
+                st.warning("⚠️ Modèle 'Flash' non trouvé, tentative avec 'Pro'...")
+                try:
+                    model = genai.GenerativeModel('models/gemini-pro-latest')
+                    response = model.generate_content([prompt, image])
+                    return response.text
+                except:
+                    st.error(f"Erreur fatale : Aucun modèle compatible trouvé.")
+                    return None
             else:
-                st.error(f"Erreur technique IA : {e}")
+                st.error(f"Erreur technique : {e}")
                 return None
     return None
 
@@ -104,7 +112,7 @@ def analyser_document_ia(image):
 
 # --- INTERFACE ---
 st.title("ClaimCheck AI 🇲🇦")
-st.caption("Mode : Robuste | Référentiel : ANAM & TNR 2007")
+st.caption("Mode : Expert | Modèle : Gemini Flash Latest")
 
 col_upload, col_result = st.columns([1, 2])
 
@@ -116,7 +124,7 @@ with col_upload:
 
 with col_result:
     if uploaded_file and st.button("Lancer l'Audit"):
-        with st.spinner("⚡ Analyse intelligente en cours (Mode Sécurisé)..."):
+        with st.spinner("⚡ Analyse intelligente en cours..."):
             
             data = analyser_document_ia(image)
             
@@ -146,6 +154,7 @@ with col_result:
                     ref = None
                     prix_legal = 0
                     
+                    # Logique de recherche
                     if code: 
                         ref = get_tarif_reference(code, secteur)
                         if ref and ref["type"] == "lettre":
@@ -156,6 +165,7 @@ with col_result:
                         if ref: 
                             prix_legal = ref["valeur"]
                     
+                    # Affichage
                     c1, c2, c3 = st.columns([3, 2, 2])
                     c1.write(f"**{desc}**")
                     if code and coeff > 0: c1.caption(f"Code : {code}{coeff}")
@@ -163,6 +173,7 @@ with col_result:
                     
                     if prix_legal > 0:
                         diff = prix_facture - prix_legal
+                        # Tolérance de 10%
                         if diff > (prix_legal * 0.1):
                             c3.error(f"❌ Ref: {prix_legal} DH")
                             st.caption(f"⚠️ **Surfacturation de {diff:.2f} DH**")
