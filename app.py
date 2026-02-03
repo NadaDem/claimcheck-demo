@@ -11,7 +11,7 @@ except:
     st.error("⚠️ Clé API manquante. Configurez les secrets dans Streamlit.")
     st.stop()
 
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.5-pro')
 
 st.set_page_config(page_title="ClaimCheck AI - Expert", page_icon="🇲🇦", layout="wide")
 
