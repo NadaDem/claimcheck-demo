@@ -14,7 +14,7 @@ except:
 # --- 2. LE CHANGEMENT CRUCIAL (Basé sur ta liste) ---
 # On utilise le modèle présent dans ton diagnostic : 'models/gemini-2.0-flash'
 try:
-    model = genai.GenerativeModel('models/gemini-2.0-flash')
+    model = genai.GenerativeModel('models/gemini-flash-latest')
 except Exception as e:
     st.error(f"Erreur de chargement du modèle : {e}")
     st.stop()
