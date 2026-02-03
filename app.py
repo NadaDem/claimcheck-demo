@@ -8,138 +8,138 @@ import sqlite3
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except:
-    st.error("⚠️ Clé API manquante.")
+    st.error("⚠️ Clé API manquante. Configurez les secrets dans Streamlit.")
     st.stop()
 
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-st.set_page_config(page_title="ClaimCheck AI - Expert ANAM", page_icon="🇲🇦", layout="wide")
+st.set_page_config(page_title="ClaimCheck AI - Expert", page_icon="🇲🇦", layout="wide")
 
-# --- CONNEXION BASE DE DONNÉES ---
-def get_tarif(code_ou_nom, secteur):
-    """Cherche le tarif dans la DB selon le secteur (PRIVE ou PUBLIC)"""
+# --- CERVEAU : CONNEXION BDD ---
+def get_tarif_reference(nom_ou_code, secteur):
+    """Cherche le prix officiel dans notre base de données"""
     conn = sqlite3.connect('claimcheck.db')
     c = conn.cursor()
     
-    colonne_tarif = "tarif_prive" if secteur == "PRIVE" else "tarif_public"
+    # On sélectionne la bonne colonne de prix
+    colonne_prix = "tarif_prive" if secteur == "PRIVE" else "tarif_public"
     
-    # 1. Chercher dans les Lettres Clés (C, K, B...)
-    c.execute(f"SELECT {colonne_tarif}, description FROM lettres_cles WHERE code=?", (code_ou_nom,))
+    # 1. Est-ce une Lettre Clé ? (ex: K, C, B)
+    c.execute(f"SELECT {colonne_prix}, description FROM lettres_cles WHERE code=?", (nom_ou_code.upper(),))
     res = c.fetchone()
     if res:
         conn.close()
         return {"type": "lettre", "valeur": res[0], "desc": res[1]}
-    
-    # 2. Chercher dans les Forfaits (Césarienne, Scanner...)
-    c.execute(f"SELECT {colonne_tarif}, nom_acte FROM forfaits WHERE mots_cles LIKE ?", (f"%{code_ou_nom.lower()}%",))
+        
+    # 2. Est-ce un Forfait ? (ex: Césarienne)
+    c.execute(f"SELECT {colonne_prix}, nom_acte FROM forfaits WHERE mots_cles LIKE ?", (f"%{nom_ou_code.lower()}%",))
     res = c.fetchone()
     conn.close()
     
     if res:
         return {"type": "forfait", "valeur": res[0], "desc": res[1]}
-    
+        
     return None
 
-# --- FONCTIONS IA ---
-def analyser_document(image):
+# --- YEUX : ANALYSE DOC ---
+def analyser_document_ia(image):
     prompt = """
-    Analyse ce document médical marocain.
+    Tu es un auditeur médical expert au Maroc. Analyse ce document.
     
-    ÉTAPE 1 : IDENTIFICATION DU SECTEUR
-    Cherche des indices :
-    - PUBLIC : "Royaume du Maroc", "Ministère de la Santé", "CHU", "Hôpital Provincial".
-    - PRIVÉ : "Clinique", "Cabinet", "Polyclinique", "Centre", "Dr".
+    ÉTAPE 1 : DÉTECTION DU SECTEUR
+    - Si tu vois "Ministère de la Santé", "CHU", "Hôpital Provincial", "Royaume du Maroc" (logo) -> Secteur PUBLIC.
+    - Si tu vois "Clinique", "Polyclinique", "Cabinet", "Centre Privé" -> Secteur PRIVE.
     
-    ÉTAPE 2 : EXTRACTION DES DONNÉES
-    Extrais en JSON :
+    ÉTAPE 2 : EXTRACTION
+    Extrais en JSON strict :
     {
-        "secteur": "PRIVE" ou "PUBLIC",
-        "etablissement": "Nom trouvé",
+        "secteur": "PUBLIC" ou "PRIVE",
+        "etablissement": "Nom de l'hôpital ou clinique",
         "actes": [
             {
-                "description": "Nom de l'acte (ex: Césarienne, Scanner, Consultation)",
-                "code": "Lettre clé (ex: K, C, B) si visible",
-                "coefficient": "Valeur du coeff (ex: 100, 20)",
-                "montant_total": "Prix total facturé en DH"
+                "description": "Nom de l'acte (ex: Césarienne, Consultation, Scanner)",
+                "code": "Lettre clé si visible (ex: K, B, C)",
+                "coefficient": "Valeur du coeff (ex: 50, 100)",
+                "montant_facture": "Montant total en DH"
             }
         ]
     }
     """
     try:
         response = model.generate_content([prompt, image])
-        json_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(json_text)
+        clean_json = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_json)
     except:
         return None
 
 # --- INTERFACE ---
-st.title("ClaimCheck AI 🏥")
-st.markdown("**Système d'Audit Tarifaire Intelligent (ANAM / CNSS / CNOPS)**")
+st.title("ClaimCheck AI 🇲🇦")
+st.markdown("### 🛡️ Audit de Facturation Médicale (Public & Privé)")
 
-col_upload, col_result = st.columns([1, 2])
+uploaded_file = st.file_uploader("Scanner le dossier", type=['jpg', 'png', 'jpeg'])
 
-with col_upload:
-    uploaded_file = st.file_uploader("Scanner une facture ou feuille de soins", type=['jpg', 'png', 'jpeg'])
-    if uploaded_file:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Document", use_column_width=True)
-
-with col_result:
-    if uploaded_file and st.button("Lancer l'Audit de Conformité", type="primary"):
-        with st.spinner("🔍 Analyse Sectorielle & Vérification BDD..."):
-            data = analyser_document(image)
+if uploaded_file:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Document reçu", width=400)
+    
+    if st.button("Lancer l'Audit"):
+        with st.spinner("🕵️‍♂️ Analyse du secteur et des tarifs en cours..."):
+            
+            # 1. L'IA lit le document
+            data = analyser_document_ia(image)
             
             if data:
                 secteur = data.get("secteur", "PRIVE")
-                etablissement = data.get("etablissement", "Non identifié")
+                nom_hopital = data.get("etablissement", "Inconnu")
                 
-                # En-tête du rapport
+                # 2. Affichage du Contexte
                 if secteur == "PUBLIC":
-                    st.info(f"🏛️ **Secteur Public Détecté** ({etablissement})\n\nApplication de la Grille Hôpitaux (K=13 DH, C=50 DH).")
+                    st.info(f"🏛️ **Secteur Public Détecté** ({nom_hopital})\n\nApplication du Tarif Hôpital (K=13 DH).")
                 else:
-                    st.warning(f"🏨 **Secteur Privé Détecté** ({etablissement})\n\nApplication de la Grille Cliniques (K=22.50 DH, C=80 DH).")
+                    st.warning(f"🏨 **Secteur Privé Détecté** ({nom_hopital})\n\nApplication du Tarif Clinique (K=22.50 DH).")
                 
                 st.divider()
                 
-                # Analyse ligne par ligne
+                # 3. Analyse ligne par ligne
                 for acte in data.get("actes", []):
-                    desc = acte.get("description", "Acte")
+                    desc = acte.get("description", "Acte inconnu")
                     code = acte.get("code")
                     coeff = float(acte.get("coefficient") or 0)
-                    prix_facture = float(acte.get("montant_total") or 0)
+                    prix_facture = float(acte.get("montant_facture") or 0)
                     
-                    # Recherche du tarif légal
+                    # On interroge la base de données
                     ref = None
+                    prix_legal = 0
                     
-                    # Stratégie de recherche
-                    if code: # Si on a un code (ex: K100)
-                        ref = get_tarif(code, secteur)
+                    if code: # Recherche par Code (K, B...)
+                        ref = get_tarif_reference(code, secteur)
                         if ref and ref["type"] == "lettre":
                             prix_legal = ref["valeur"] * coeff
-                        else:
-                            prix_legal = 0
-                    else: # Recherche par nom (ex: Césarienne)
-                        ref = get_tarif(desc, secteur)
-                        prix_legal = ref["valeur"] if ref else 0
+                    else: # Recherche par Nom (Césarienne...)
+                        ref = get_tarif_reference(desc, secteur)
+                        if ref: prix_legal = ref["valeur"]
                     
-                    # Affichage du verdict
-                    with st.container():
-                        c1, c2, c3 = st.columns([3, 2, 2])
-                        c1.write(f"**{desc}**")
-                        if code: c1.caption(f"Code: {code} {coeff}")
-                        
-                        c2.write(f"Facturé: **{prix_facture} DH**")
-                        
-                        if prix_legal > 0:
-                            diff = prix_facture - prix_legal
-                            if diff > (prix_legal * 0.1): # Marge 10%
-                                c3.error(f"❌ Ref: {prix_legal} DH")
-                                st.write(f"⚠️ **Surfacturation de {diff} DH** par rapport au tarif réglementaire {secteur}.")
-                            else:
-                                c3.success(f"✅ Ref: {prix_legal} DH")
+                    # Verdict
+                    c1, c2, c3 = st.columns([3, 2, 2])
+                    c1.write(f"**{desc}**")
+                    if code: c1.caption(f"Code: {code} {coeff}")
+                    
+                    c2.write(f"Facturé: **{prix_facture} DH**")
+                    
+                    if prix_legal > 0:
+                        diff = prix_facture - prix_legal
+                        if diff > (prix_legal * 0.1): # Marge 10%
+                            c3.error(f"❌ Ref: {prix_legal} DH")
+                            st.write(f"⚠️ **Surfacturation de {diff} DH** detected!")
+                        elif diff < -(prix_legal * 0.1):
+                            c3.warning(f"⚠️ Ref: {prix_legal} DH")
+                            st.write("Sous-facturation (Perte financière).")
                         else:
-                            c3.info("❓ Pas de ref")
-                            st.caption("Acte non trouvé dans la base ANAM standard.")
-                        st.divider()
+                            c3.success(f"✅ Ref: {prix_legal} DH")
+                    else:
+                        c3.info("❓ Pas de référence")
+                    
+                    st.divider()
+                    
             else:
-                st.error("Erreur de lecture. Document illisible.")
+                st.error("Lecture impossible. Image trop floue ?")
