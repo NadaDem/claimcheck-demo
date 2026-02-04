@@ -6,22 +6,15 @@ import sqlite3
 import time
 import importlib.metadata
 
-# --- 1. CONTRÔLE TECHNIQUE (VERSION) ---
-st.set_page_config(page_title="ClaimCheck AI - Ultimate", page_icon="🇲🇦", layout="wide")
+# --- 1. CONTRÔLE TECHNIQUE ---
+st.set_page_config(page_title="ClaimCheck AI - Final", page_icon="🇲🇦", layout="wide")
 
 try:
-    # On récupère la version installée sur le serveur
     lib_version = importlib.metadata.version("google-generativeai")
 except:
     lib_version = "Inconnue"
 
-# Si la version est trop vieille, on arrête tout
-st.sidebar.markdown(f"**Version SDK Google :** `{lib_version}`")
-if lib_version < "0.8.0" and lib_version != "Inconnue":
-    st.error(f"🚨 **MISE À JOUR REQUISE** 🚨")
-    st.error(f"Votre serveur utilise une vieille version ({lib_version}). Il faut la version 0.8.0 minimum.")
-    st.info("👉 Allez dans 'Manage App' (en bas à droite) > 3 petits points > **Reboot App**.")
-    st.stop()
+st.sidebar.caption(f"SDK Version: {lib_version}")
 
 # --- 2. CONFIGURATION ---
 try:
@@ -30,41 +23,47 @@ except:
     st.error("⚠️ Clé API manquante.")
     st.stop()
 
-# --- 3. LISTE DES MODÈLES (Sélection chirurgicale) ---
-# On utilise ceux qui sont apparus dans TA liste verte précédente.
+# --- 3. LISTE BASÉE SUR TES CAPTURES D'ÉCRAN ---
+# Ce sont les noms EXACTS vus dans ton diagnostic
 MODELS_TO_TRY = [
-    'models/gemini-flash-latest',        # Le plus sûr (souvent un alias du 1.5)
-    'models/gemini-1.5-flash',           # Le standard
-    'models/gemini-2.0-flash-lite-preview-02-05', # Le nouveau (si dispo)
-    'models/gemini-pro',                 # L'ancien fiable
+    'models/gemini-2.0-flash-lite',      # Le plus rapide et léger (Priorité 1)
+    'models/gemini-flash-latest',        # Le standard (Priorité 2)
+    'models/gemini-2.0-flash',           # La version 2.0 (Priorité 3)
+    'models/gemini-1.5-flash',           # Le classique (Priorité 4)
 ]
 
 def ask_gemini_rotator(prompt, image):
-    last_error = "Aucun essai."
+    logs = [] # Pour enregistrer l'historique des essais
     
     for model_name in MODELS_TO_TRY:
         try:
             # On tente le modèle
             model = genai.GenerativeModel(model_name)
             response = model.generate_content([prompt, image])
+            
+            # Si ça marche
             st.toast(f"✅ Succès avec : {model_name}", icon="🚀")
             return response.text
             
         except Exception as e:
             error_str = str(e)
+            # On note l'erreur pour le diagnostic
             if "429" in error_str:
-                # Quota dépassé, on passe au suivant sans pleurer
-                continue 
+                logs.append(f"❌ {model_name} : Quota dépassé (429)")
             elif "404" in error_str:
-                # Modèle pas trouvé, on passe
-                continue
+                logs.append(f"⚠️ {model_name} : Non trouvé (404)")
             else:
-                last_error = error_str
-                
+                logs.append(f"🔥 {model_name} : {error_str}")
+            
+            # On continue vers le modèle suivant
+            continue
+
     # Si on arrive ici, c'est l'échec total
-    st.error("❌ Échec de tous les modèles.")
-    with st.expander("Voir l'erreur technique"):
-        st.write(last_error)
+    st.error("❌ Tous les modèles ont échoué.")
+    with st.expander("Voir le rapport d'erreurs complet"):
+        for log in logs:
+            st.write(log)
+            
     return None
 
 # --- CERVEAU : BDD ---
@@ -129,18 +128,26 @@ with col1:
 
 with col2:
     if uploaded_file and st.button("Lancer l'Audit", type="primary"):
-        with st.spinner("Analyse en cours..."):
+        with st.spinner("Analyse avec Gemini 2.0 Flash Lite..."):
             data = analyser_document_ia(image)
             
             if data:
                 secteur = data.get("secteur", "PRIVE")
                 nom = data.get("etablissement", "?")
-                st.success(f"Secteur détecté : {secteur} ({nom})")
+                
+                if secteur == "PUBLIC":
+                    st.info(f"🏛️ Secteur Public ({nom})")
+                else:
+                    st.warning(f"🏨 Secteur Privé ({nom})")
+                
+                st.divider()
                 
                 for acte in data.get("actes", []):
                     desc = acte.get("description", "Inconnu")
-                    prix = acte.get("montant_facture", 0)
-                    st.write(f"**{desc}** : {prix} DH")
+                    prix = float(acte.get("montant_facture") or 0)
+                    
+                    st.markdown(f"**{desc}**")
+                    st.write(f"Facturé : {prix} DH")
                     st.divider()
             else:
-                st.error("Lecture impossible. Essayez une autre photo.")
+                st.error("Lecture impossible.")
