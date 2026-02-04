@@ -1,29 +1,29 @@
 import streamlit as st
 import google.generativeai as genai
 
-st.title("🔑 Test Ultime de la Clé Google")
+st.title("📋 Inventaire de la Nouvelle Clé")
 
-# 1. Lecture de la clé
 try:
+    # On charge ta nouvelle clé
     api_key = st.secrets["GOOGLE_API_KEY"]
-    st.success(f"Clé trouvée : ...{api_key[-5:]}") # Montre la fin pour vérifier que c'est la NOUVELLE
     genai.configure(api_key=api_key)
-except Exception as e:
-    st.error(f"Problème lecture secrets : {e}")
-    st.stop()
+    
+    st.write("Interrogation de Google en cours...")
+    
+    # On demande la liste
+    models = genai.list_models()
+    
+    found = False
+    st.write("### Modèles disponibles :")
+    
+    for m in models:
+        # On affiche tout ce qui peut générer du texte/image
+        if 'generateContent' in m.supported_generation_methods:
+            st.success(f"✅ {m.name}")
+            found = True
+            
+    if not found:
+        st.error("Aucun modèle trouvé ! Le compte est peut-être vide.")
 
-# 2. Test simple
-if st.button("Tester la connexion maintenant"):
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content("Réponds juste 'OK' si tu me reçois.")
-        st.balloons()
-        st.success(f"RÉPONSE GOOGLE : {response.text}")
-        st.info("Si tu vois ce message, la clé MARCHE. On peut remettre le gros code.")
-    except Exception as e:
-        st.error(f"❌ ERREUR BRUTE : {e}")
-        st.markdown("""
-        **Interprétation :**
-        * **429** : Quota dépassé (Même avec la nouvelle clé, Google bloque l'IP Streamlit).
-        * **400/403** : Clé invalide ou mal copiée.
-        """)
+except Exception as e:
+    st.error(f"Erreur technique : {e}")
