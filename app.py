@@ -7,14 +7,14 @@ import time
 import importlib.metadata
 
 # --- 1. CONTRÔLE TECHNIQUE ---
-st.set_page_config(page_title="ClaimCheck AI - Final", page_icon="🇲🇦", layout="wide")
+st.set_page_config(page_title="ClaimCheck AI - Expert", page_icon="🇲🇦", layout="wide")
 
 try:
     lib_version = importlib.metadata.version("google-generativeai")
 except:
     lib_version = "Inconnue"
 
-st.sidebar.caption(f"SDK Version: {lib_version}")
+st.sidebar.caption(f"SDK Google : {lib_version}")
 
 # --- 2. CONFIGURATION ---
 try:
@@ -23,17 +23,18 @@ except:
     st.error("⚠️ Clé API manquante.")
     st.stop()
 
-# --- 3. LISTE BASÉE SUR TES CAPTURES D'ÉCRAN ---
-# Ce sont les noms EXACTS vus dans ton diagnostic
+# --- 3. LISTE DE SECOURS (ON PASSE AU "PRO") ---
+# Puisque tes quotas "Flash" sont vides (Erreur 429), on tente les "Pro".
 MODELS_TO_TRY = [
-    'models/gemini-2.0-flash-lite',      # Le plus rapide et léger (Priorité 1)
-    'models/gemini-flash-latest',        # Le standard (Priorité 2)
-    'models/gemini-2.0-flash',           # La version 2.0 (Priorité 3)
-    'models/gemini-1.5-flash',           # Le classique (Priorité 4)
+    'models/gemini-1.5-pro',             # Le plus intelligent (Quota séparé ?)
+    'models/gemini-1.5-pro-latest',      # Sa variante
+    'models/gemini-pro',                 # L'ancienne version (souvent dispo)
+    'models/gemini-pro-vision',          # L'ancien spécialiste image
+    'models/gemini-2.0-flash-lite'       # On garde le lite en dernier recours
 ]
 
 def ask_gemini_rotator(prompt, image):
-    logs = [] # Pour enregistrer l'historique des essais
+    logs = []
     
     for model_name in MODELS_TO_TRY:
         try:
@@ -47,23 +48,19 @@ def ask_gemini_rotator(prompt, image):
             
         except Exception as e:
             error_str = str(e)
-            # On note l'erreur pour le diagnostic
             if "429" in error_str:
-                logs.append(f"❌ {model_name} : Quota dépassé (429)")
+                logs.append(f"⏳ {model_name} : Quota plein (429)")
             elif "404" in error_str:
-                logs.append(f"⚠️ {model_name} : Non trouvé (404)")
+                logs.append(f"⚠️ {model_name} : Non trouvé")
             else:
-                logs.append(f"🔥 {model_name} : {error_str}")
-            
-            # On continue vers le modèle suivant
+                logs.append(f"❌ {model_name} : {error_str}")
             continue
 
-    # Si on arrive ici, c'est l'échec total
-    st.error("❌ Tous les modèles ont échoué.")
-    with st.expander("Voir le rapport d'erreurs complet"):
+    # Si tout échoue
+    st.error("❌ Tous les quotas sont épuisés pour le moment.")
+    with st.expander("Voir le détail"):
         for log in logs:
-            st.write(log)
-            
+            st.code(log)
     return None
 
 # --- CERVEAU : BDD ---
@@ -128,7 +125,7 @@ with col1:
 
 with col2:
     if uploaded_file and st.button("Lancer l'Audit", type="primary"):
-        with st.spinner("Analyse avec Gemini 2.0 Flash Lite..."):
+        with st.spinner("Recherche d'un modèle disponible (Mode PRO)..."):
             data = analyser_document_ia(image)
             
             if data:
@@ -150,4 +147,4 @@ with col2:
                     st.write(f"Facturé : {prix} DH")
                     st.divider()
             else:
-                st.error("Lecture impossible.")
+                st.error("Lecture impossible ou quotas épuisés.")
