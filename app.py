@@ -14,19 +14,19 @@ except:
 
 st.set_page_config(page_title="ClaimCheck AI - Expert", page_icon="🇲🇦", layout="wide")
 
-# --- LISTE DES MODÈLES À TESTER (ORDRE DE PRIORITÉ) ---
-# Si le premier est bloqué (429), on passe au suivant.
+# --- LISTE DE SÉCURITÉ (ORDRE DE PRIORITÉ) ---
+# CRUCIAL : On met le 1.5 en premier car il a un quota de 15 requêtes/minute.
+# On évite le "latest" ou le "2.5" qui n'ont que 2 requêtes/jour en mode gratuit.
 MODELS_TO_TRY = [
-    'models/gemini-1.5-flash',       # Le standard rapide
-    'models/gemini-flash-latest',    # La dernière version
-    'models/gemini-1.5-pro',         # Plus puissant
-    'models/gemini-pro',             # L'ancien (souvent libre)
-    'models/gemini-2.0-flash-exp'    # L'expérimental (si dispo)
+    'models/gemini-1.5-flash',       # LE ROI DU QUOTA (Stable & Rapide)
+    'models/gemini-1.5-flash-latest',# Alternative directe
+    'models/gemini-1.5-pro',         # Plus intelligent (mais plus lent)
+    'models/gemini-pro',             # L'ancien standard
 ]
 
-# --- FONCTION PASSE-PARTOUT ---
+# --- FONCTION ROBUSTE "PASSE-PARTOUT" ---
 def ask_gemini_rotator(prompt, image):
-    """Essaie les modèles un par un jusqu'à ce que ça passe"""
+    """Essaie les modèles stables un par un jusqu'à ce que ça passe"""
     
     last_error = ""
     
@@ -37,21 +37,19 @@ def ask_gemini_rotator(prompt, image):
             response = model.generate_content([prompt, image])
             
             # Si on arrive ici, c'est que ça a marché !
-            # On affiche quel modèle a réussi (pour info)
-            st.success(f"✅ Analyse réussie avec le modèle : {model_name}")
+            st.toast(f"✅ Analyse réussie avec : {model_name}", icon="🤖")
             return response.text
             
         except Exception as e:
             error_str = str(e)
-            # Si c'est une erreur de quota (429) ou modèle introuvable (404), on continue
+            # Si c'est une erreur de quota (429) ou introuvable (404), on passe au suivant
             if "429" in error_str or "404" in error_str:
-                # On passe silencieusement au suivant
                 continue
             else:
                 last_error = error_str
     
     # Si on arrive ici, tous les modèles ont échoué
-    st.error(f"❌ Tous les modèles sont saturés ou indisponibles. Erreur : {last_error}")
+    st.error(f"❌ Tous les modèles sont indisponibles. Dernière erreur : {last_error}")
     return None
 
 # --- CERVEAU : CONNEXION BDD ---
@@ -61,12 +59,14 @@ def get_tarif_reference(nom_ou_code, secteur):
         c = conn.cursor()
         colonne_prix = "tarif_prive" if secteur == "PRIVE" else "tarif_public"
         
+        # 1. Recherche par Code Exact (K, B, C...)
         c.execute(f"SELECT {colonne_prix}, description FROM lettres_cles WHERE code=?", (nom_ou_code.upper(),))
         res = c.fetchone()
         if res:
             conn.close()
             return {"type": "lettre", "valeur": res[0], "desc": res[1]}
             
+        # 2. Recherche par Mot Clé (Forfaits)
         c.execute(f"SELECT {colonne_prix}, nom_acte FROM forfaits WHERE mots_cles LIKE ?", (f"%{nom_ou_code.lower()}%",))
         res = c.fetchone()
         conn.close()
@@ -83,7 +83,7 @@ def analyser_document_ia(image):
     Tu es un expert en facturation médicale marocaine (CNSS/AMO). Analyse cette image.
     
     TA MISSION :
-    1. Détermine si c'est un établissement PUBLIC (Hôpital, CHU, Ministère) ou PRIVE (Clinique, Cabinet, Dr).
+    1. Détermine si c'est un établissement PUBLIC (Hôpital, CHU) ou PRIVE (Clinique, Cabinet).
     2. Extrais les actes facturés.
     
     FORMAT DE RÉPONSE ATTENDU (JSON STRICT UNIQUEMENT) :
@@ -105,6 +105,7 @@ def analyser_document_ia(image):
     
     if json_text:
         try:
+            # Nettoyage renforcé pour éviter les erreurs de parsing
             clean_json = json_text.replace("```json", "").replace("```", "").strip()
             return json.loads(clean_json)
         except:
@@ -114,7 +115,7 @@ def analyser_document_ia(image):
 
 # --- INTERFACE ---
 st.title("ClaimCheck AI 🇲🇦")
-st.caption("Mode : Multi-Moteurs (Anti-Blocage)")
+st.caption("Mode : Expert | Modèle : Priorité Haut Quota (1.5 Flash)")
 
 col_upload, col_result = st.columns([1, 2])
 
@@ -125,8 +126,8 @@ with col_upload:
         st.image(image, caption="Document à auditer", use_column_width=True)
 
 with col_result:
-    if uploaded_file and st.button("Lancer l'Audit"):
-        with st.spinner("🔄 Recherche d'un moteur IA disponible..."):
+    if uploaded_file and st.button("Lancer l'Audit", type="primary"):
+        with st.spinner("⚡ Analyse intelligente en cours..."):
             
             data = analyser_document_ia(image)
             
@@ -154,6 +155,7 @@ with col_result:
                     ref = None
                     prix_legal = 0
                     
+                    # Logique de calcul
                     if code: 
                         ref = get_tarif_reference(code, secteur)
                         if ref and ref["type"] == "lettre":
@@ -164,23 +166,26 @@ with col_result:
                         if ref: 
                             prix_legal = ref["valeur"]
                     
+                    # Affichage
                     c1, c2, c3 = st.columns([3, 2, 2])
-                    c1.write(f"**{desc}**")
+                    c1.markdown(f"**{desc}**")
                     if code and coeff > 0: c1.caption(f"Code : {code}{coeff}")
                     c2.write(f"Facturé : **{prix_facture} DH**")
                     
                     if prix_legal > 0:
                         diff = prix_facture - prix_legal
-                        if diff > (prix_legal * 0.1):
-                            c3.error(f"❌ Ref: {prix_legal} DH")
-                            st.caption(f"⚠️ **Surfacturation de {diff:.2f} DH**")
+                        if diff > (prix_legal * 0.1): # Marge 10%
+                            c3.error(f"❌ Ref: {prix_legal}")
+                            st.caption(f"⚠️ **+{diff:.2f} DH**")
                         elif diff < -(prix_legal * 0.1):
-                            c3.warning(f"⚠️ Ref: {prix_legal} DH")
+                            c3.warning(f"⚠️ Ref: {prix_legal}")
                             st.caption("Sous-facturation")
                         else:
-                            c3.success(f"✅ Ref: {prix_legal} DH")
+                            c3.success(f"✅ Ref: {prix_legal}")
                             st.caption("Conforme")
                     else:
                         c3.info("❓ Pas de réf")
                     
                     st.divider()
+            else:
+                st.error("L'IA n'a pas pu lire le document.")
